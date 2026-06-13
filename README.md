@@ -22,15 +22,13 @@
 Este projeto detecta e conta automaticamente os carros que passam por uma rua a partir de um vídeo de câmera estática.  
 A contagem é feita por uma **linha virtual horizontal** desenhada no centro do frame — sempre que o centroide de um veículo cruza essa linha, o contador incrementa.
 
-O sistema também detecta o **sentido de circulação** (subindo ↑ ou descendo ↓ na tela), o que permite analisar tráfego em ruas de mão dupla.
-
 ---
 
 ## 🧠 Técnica Utilizada
 
 ```
 Vídeo → Subtração de Fundo (MOG2) → Limpeza Morfológica → Detecção de Contornos
-      → Rastreamento por ID → Cruzamento da Linha → Contagem por Sentido
+      → Rastreamento por ID → Cruzamento da Linha → Contagem
 ```
 
 | Etapa | Método |
@@ -40,7 +38,6 @@ Vídeo → Subtração de Fundo (MOG2) → Limpeza Morfológica → Detecção d
 | Detectar veículos | `cv2.findContours` com filtro de área mínima |
 | Rastrear entre frames | Associação por distância euclidiana do centroide |
 | Evitar contagem dupla | Cooldown por ID (bloqueio de N frames após contagem) |
-| Detectar sentido | Comparação do `cy` atual vs anterior do mesmo ID |
 
 ---
 
@@ -117,11 +114,9 @@ Duração     : 12.0 segundos
 =============================================
         RESULTADO FINAL DO CONTADOR
 =============================================
-  Frames analisados   : 360
-  Total de carros     : 3
-  Sentido v (descendo): 2
-  Sentido ^ (subindo) : 1
-  Vídeo de saída      : resultado_contagem.mp4
+  Frames processados : 360
+  Carros contados    : 3
+  Vídeo salvo em     : resultado_contagem.mp4
 =============================================
 ```
 

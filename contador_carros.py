@@ -2,34 +2,33 @@
 """
 Contador de Carros com Visão Computacional
 Universidade Univille - Unidade 04 - Aprendizado de Máquinas
-Aluna: Ana Paula de Souza
 TURMA 2026/2
 
-Técnica: Subtração de Fundo (MOG2) + Detecção de Contornos + Linha Virtual
-         com rastreamento de centroide para evitar contagem duplicada.
+Tecnica: Subtracao de Fundo (MOG2) + Deteccao de Contornos + Linha Virtual
+         Rastreamento por ID para evitar contagem duplicada.
 """
 
 import cv2
 import numpy as np
 
-# ─────────────────────────────────────────────────
-# PARÂMETROS — ajuste conforme o seu vídeo
-# ─────────────────────────────────────────────────
-ARQUIVO_VIDEO  = 'video.mp4'
-ARQUIVO_SAIDA  = 'resultado_contagem.mp4'
-AREA_MINIMA    = 1500  # área mínima (px²) para considerar um carro (1080p é maior)
-OFFSET         = 12    # tolerância em pixels ao cruzar a linha
-COOLDOWN_FRAMES = 20   # após contar um carro, ignora a mesma região por N frames
-DIST_MINIMA    = 80    # distância mínima (px) entre dois carros diferentes
-MAX_FRAMES     = 0     # 0 = processa o vídeo inteiro
+# -------------------------------------------------
+# PARAMETROS
+# -------------------------------------------------
+ARQUIVO_VIDEO   = 'video.mp4'
+ARQUIVO_SAIDA   = 'resultado_contagem.mp4'
+AREA_MINIMA     = 1500   # px minimos para ser considerado um carro
+OFFSET          = 12     # tolerancia em pixels ao cruzar a linha
+COOLDOWN_FRAMES = 20     # frames de bloqueio apos contar um carro
+DIST_MINIMA     = 80     # distancia maxima para associar ao mesmo carro
+MAX_FRAMES      = 0      # 0 = processa tudo
 
-# ─────────────────────────────────────────────────
-# Inicialização
-# ─────────────────────────────────────────────────
+# -------------------------------------------------
+# Inicializacao
+# -------------------------------------------------
 cap = cv2.VideoCapture(ARQUIVO_VIDEO)
 
 if not cap.isOpened():
-    print(f'ERRO: Não foi possível abrir "{ARQUIVO_VIDEO}".')
+    print('ERRO: Nao foi possivel abrir "' + ARQUIVO_VIDEO + '".')
     exit(1)
 
 largura      = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -37,11 +36,11 @@ altura       = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps          = cap.get(cv2.CAP_PROP_FPS)
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-print('=== Informações do Vídeo ===')
-print(f'Resolução   : {largura} x {altura} pixels')
-print(f'FPS         : {fps:.1f}')
-print(f'Total frames: {total_frames}')
-print(f'Duração     : {total_frames / fps:.1f} segundos')
+print('=== Informacoes do Video ===')
+print('Resolucao   : ' + str(largura) + ' x ' + str(altura) + ' pixels')
+print('FPS         : ' + str(round(fps, 1)))
+print('Total frames: ' + str(total_frames))
+print('Duracao     : ' + str(round(total_frames / fps, 1)) + ' segundos')
 print()
 print('Pressione  Q  para parar antes do fim.')
 print()
@@ -51,7 +50,6 @@ LINHA_Y = altura // 2
 subtrator = cv2.createBackgroundSubtractorMOG2(
     history=300, varThreshold=60, detectShadows=True
 )
-
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -59,28 +57,27 @@ saida  = cv2.VideoWriter(ARQUIVO_SAIDA, fourcc, fps, (largura, altura))
 
 contador_carros = 0
 frame_idx       = 0
+proximo_id      = 0
+rastreados      = {}  # { id: {'cx': x, 'cy': y} }
+contados        = {}  # { id: frame_em_que_foi_contado }
 
-# Dicionário: cx -> frame em que foi contado (para o cooldown)
-# Formato: { cx_aproximado: frame_contado }
-carros_contados = {}
+# -------------------------------------------------
+# Funcoes auxiliares
+# -------------------------------------------------
+def encontrar_id_proximo(cx, cy, rastreados, dist_max=80):
+    melhor_id, melhor_dist = None, dist_max
+    for obj_id, pos in rastreados.items():
+        dist = np.hypot(cx - pos['cx'], cy - pos['cy'])
+        if dist < melhor_dist:
+            melhor_dist, melhor_id = dist, obj_id
+    return melhor_id
 
-# ─────────────────────────────────────────────────
-# Funções auxiliares
-# ─────────────────────────────────────────────────
-def ja_foi_contado(cx, frame_atual):
-    """Retorna True se já existe um carro contado próximo a cx recentemente."""
-    for cx_anterior, frame_contado in list(carros_contados.items()):
-        # Remove entradas antigas (fora do cooldown)
-        if frame_atual - frame_contado > COOLDOWN_FRAMES:
-            del carros_contados[cx_anterior]
-            continue
-        if abs(cx - cx_anterior) < DIST_MINIMA:
-            return True
-    return False
+def cooldown_ativo(obj_id, frame_atual):
+    return obj_id in contados and (frame_atual - contados[obj_id]) <= COOLDOWN_FRAMES
 
-# ─────────────────────────────────────────────────
+# -------------------------------------------------
 # Loop principal
-# ─────────────────────────────────────────────────
+# -------------------------------------------------
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -88,22 +85,24 @@ while True:
     if MAX_FRAMES > 0 and frame_idx >= MAX_FRAMES:
         break
 
-    # 1. Subtração de fundo
+    # 1. Subtracao de fundo
     mascara = subtrator.apply(frame)
     _, mascara = cv2.threshold(mascara, 200, 255, cv2.THRESH_BINARY)
 
-    # 2. Limpeza morfológica
+    # 2. Limpeza morfologica
     mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN,  kernel)
     mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, kernel)
     mascara = cv2.dilate(mascara, kernel, iterations=2)
 
-    # 3. Detecção de contornos
+    # 3. Contornos
     contornos, _ = cv2.findContours(
         mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
     # 4. Linha de contagem (amarela)
     cv2.line(frame, (0, LINHA_Y), (largura, LINHA_Y), (0, 255, 255), 2)
+
+    ids_atuais = {}
 
     for contorno in contornos:
         area = cv2.contourArea(contorno)
@@ -114,38 +113,47 @@ while True:
         cx = x + w // 2
         cy = y + h // 2
 
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
+        obj_id = encontrar_id_proximo(cx, cy, rastreados)
+        if obj_id is None:
+            obj_id = proximo_id
+            proximo_id += 1
+            rastreados[obj_id] = {'cx': cx, 'cy': cy}
 
-        # 5. Verifica cruzamento da linha COM proteção de duplicata
+        ids_atuais[obj_id] = {'cx': cx, 'cy': cy}
+
+        cor = (0, 255, 0)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), cor, 2)
+        cv2.circle(frame, (cx, cy), 6, cor, -1)
+        cv2.putText(frame, 'ID ' + str(obj_id), (x, y - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, cor, 2)
+
+        # 5. Verifica cruzamento
         if (LINHA_Y - OFFSET) < cy < (LINHA_Y + OFFSET):
-            if not ja_foi_contado(cx, frame_idx):
+            if not cooldown_ativo(obj_id, frame_idx):
                 contador_carros += 1
-                carros_contados[cx] = frame_idx
+                contados[obj_id] = frame_idx
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 3)
-                cv2.putText(
-                    frame, 'CONTADO', (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2
-                )
+                cv2.putText(frame, 'CONTADO', (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+    rastreados = ids_atuais
 
     # 6. Placar
     cv2.rectangle(frame, (0, 0), (240, 55), (0, 0, 0), -1)
-    cv2.putText(
-        frame, f'Carros: {contador_carros}',
-        (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3
-    )
+    cv2.putText(frame, 'Carros: ' + str(contador_carros),
+                (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3)
 
     cv2.imshow('Contador de Carros', frame)
     saida.write(frame)
     frame_idx += 1
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
-        print('Interrompido pelo usuário.')
+        print('Interrompido pelo usuario.')
         break
 
-# ─────────────────────────────────────────────────
-# Finalização
-# ─────────────────────────────────────────────────
+# -------------------------------------------------
+# Finalizacao
+# -------------------------------------------------
 cap.release()
 saida.release()
 cv2.destroyAllWindows()
@@ -153,7 +161,7 @@ cv2.destroyAllWindows()
 print('=' * 45)
 print('        RESULTADO FINAL DO CONTADOR')
 print('=' * 45)
-print(f'  Frames processados : {frame_idx}')
-print(f'  Carros contados    : {contador_carros}')
-print(f'  Vídeo salvo em     : {ARQUIVO_SAIDA}')
+print('  Frames processados : ' + str(frame_idx))
+print('  Carros contados    : ' + str(contador_carros))
+print('  Video salvo em     : ' + ARQUIVO_SAIDA)
 print('=' * 45)
